@@ -2,55 +2,52 @@ import requests
 import re
 import pendulum
 import json
+from collections import namedtuple
 
-pendulum.set_formatter('alternative')
+IntradayData = namedtuple('IntradayData', 'headers data')
+DataPoint = namedtuple('DataPoint', ['Time', 'EnergyOut', 'PowerOut', 'PowerAvg', 'EnergyIn', 'EnergyNet', 'PowerIn', 'Export', 'Import', 'Volt'])
 
-def getInputOutput(requestedDate, id, sid):
-        
-    requestedDate = pendulum.create(2017,10,17)
-    # Weirdly, to get a day's data, you request the next day in the API. 
-    # Yep.
+def getIntradayData(requestedDate: pendulum.DateTime, siteId: str):
+
+    # Weirdly, to get a day's data, you request the next day in the API... Yep
     dateString = requestedDate.add(days=1).format('YYYYMMDD')
-    r = requests.get('https://pvoutput.org/intraday.jsp?id='+id+'&sid='+sid+'&dt='+dateString+'&gs=0&m=0')
-    print r.content
+    r = requests.get(f'https://pvoutput.org/intraday.jsp?id=&sid={siteId}&dt={dateString}&gs=0&m=0')
+
+    # list of variable names in js script we want
+    varNames = ('dataEnergyOut', 'dataPowerOut', 'dataPowerAvg', 'dataEnergyIn',
+        'dataEnergyNet', 'dataPowerIn', 'dataExport', 'dataImport', 'dataVolt')
+    dataPoints = 0
+    data = {}
 
     # Grab the times js string. 
-    times = re.search(r'var cats =(.*);',r.content,re.M|re.I).group(1)
-    # Replace JS syntax so that we have only values.
-    times = times.replace(' ','').replace('[','').replace(']','').replace("'","").split(',')
+    for match in re.finditer(r'var (\w+) = \[(.*?)\];', str(r.content), re.M|re.I):
+        varName, dataString = match.group(1, 2)
+        if (varName in varNames or varName == 'timeArray') and dataString:
+            dataList = dataString.split(',')
+            if len(dataList) > 0:
+                data[varName] = dataList
+            
+            if len(dataList) > dataPoints:
+                dataPoints = len(dataList)
+
+    if 'timeArray' not in data:
+        raise NameError('timeArray is missing from page, this program may be out of date.')
+
+    for varName in varNames:
+        if varName not in data:
+            data[varName] = [0 for x in range(0, dataPoints)]
+    
+    dataList = []
+
     # Convert each time to a pendulum object
-    times = [pendulum.parse(requestedDate.to_date_string() + " "+time) for time in times]
+    for idx, val in enumerate(data['timeArray']):
+        hour = int(val) // 60; minute = int(val) % 60
+        dataPoint = [requestedDate.set(hour=hour,minute=minute)]
+        for varName in varNames:
+            dataPoint.append(float(data[varName][idx]) if data[varName][idx] != 'null' else None)
 
+        dataList.append(DataPoint(*dataPoint))
 
-    # Grab the energy import js string. 
-    energyExport = re.search(r'var dataEnergyOut =(.*);',r.content,re.M|re.I).group(1)
-    # Replace JS syntax so that we just have the values. 
-    energyExport = energyExport.replace(' ','').replace('[','').replace(']','').replace("'","").split(',')
-    # Convert all to floats
-    energyExport = [float(x) if x != 'null' else 0.0 for x in energyExport]
-    # Go backwards through the list and convert to non-cumulative by subtracting previous.
-    for i in range(len(energyExport))[::-1]:
-        if i > 0:
-            energyExport[i] = energyExport[i] - energyExport[i - 1]
+    headers = ('Time', 'Energy Out', 'Power Out', 'Power Avg', 'Energy In', 'Energy Net', 'Power In', 'Export', 'Import', 'Volt')
 
-   
-
-    # Grab the energy import js string. 
-    energyImport = re.search(r'var dataEnergyIn =(.*);',r.content,re.M|re.I).group(1)
-    # Replace JS syntax so that we just have the values. 
-    energyImport = energyImport.replace(' ','').replace('[','').replace(']','').replace("'","").split(',')
-    # Convert all to floats
-    energyImport = [float(x) if x != 'null' else 0.0 for x in energyImport]
-    # Go backwards through the list and convert to non-cumulative by subtracting previous. 
-    for i in range(len(energyImport))[::-1]:
-        if i > 0:
-            energyImport[i] = energyImport[i] - energyImport[i - 1]
-
-    # Assemble output
-    output = {}
-    for i in range(len(times)):
-        output[str(times[i])] = {'energyExport':energyExport[i], 'energyImport':energyImport[i]}
-    return output
-
-print getInputOutput(pendulum.create(2017,10,17), '34368', '31482')
-
+    return IntradayData(headers, dataList)

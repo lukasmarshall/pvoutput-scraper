@@ -7,11 +7,30 @@ from collections import namedtuple
 IntradayData = namedtuple('IntradayData', 'headers data')
 DataPoint = namedtuple('DataPoint', ['Time', 'EnergyOut', 'PowerOut', 'PowerAvg', 'EnergyIn', 'EnergyNet', 'PowerIn', 'Export', 'Import', 'Volt'])
 
-def getIntradayData(requestedDate: pendulum.DateTime, siteId: str):
+_host = 'https://pvoutput.org'
+
+def getSession(username: str, password: str):
+    s = requests.Session()
+    r = s.post(f'{_host}/index.jsp', {'login': username, 'password': password})
+    if r.status_code != 302:
+        print("Login was unsuccessful")
+        s.close()
+
+    return s
+
+def closeSession(session):
+    s.get(f'{_host}/logout.jsp')
+    s.close()
+
+def getIntradayData(requestedDate: pendulum.DateTime, siteId: str, session=None):
 
     # Weirdly, to get a day's data, you request the next day in the API... Yep
     dateString = requestedDate.add(days=1).format('YYYYMMDD')
-    r = requests.get(f'https://pvoutput.org/intraday.jsp?id=&sid={siteId}&dt={dateString}&gs=0&m=0')
+    url = f'{_host}/intraday.jsp?id=&sid={siteId}&dt={dateString}&gs=0&m=0'
+    if not session:
+        r = requests.get(url)
+    else:
+        r = session.get(url)
 
     # list of variable names in js script we want
     varNames = ('dataEnergyOut', 'dataPowerOut', 'dataPowerAvg', 'dataEnergyIn',
